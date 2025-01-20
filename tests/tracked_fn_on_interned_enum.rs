@@ -16,7 +16,7 @@ struct Age {
     age: u32,
 }
 
-#[derive(Debug, salsa::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Enum)]
 enum Enum<'db> {
     Name(Name),
     NameAndAge(NameAndAge<'db>),
@@ -28,7 +28,7 @@ struct Input {
     value: String,
 }
 
-#[derive(Debug, salsa::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Enum)]
 enum EnumOfEnum<'db> {
     Enum(Enum<'db>),
     Input(Input),
