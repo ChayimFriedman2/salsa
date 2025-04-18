@@ -5,6 +5,7 @@ use crate::cycle::{CycleHeads, CycleRecoveryStrategy};
 use crate::function::fetch::LazyActiveQueryGuard;
 use crate::function::memo::Memo;
 use crate::function::{Configuration, IngredientImpl};
+use crate::ingredient::CycleHeadKind;
 use crate::key::DatabaseKeyIndex;
 use crate::table::sync::ClaimResult;
 use crate::zalsa::{MemoIngredientIndex, Zalsa, ZalsaDatabase};
@@ -119,6 +120,9 @@ where
                         stack,
                     );
                 }),
+                CycleRecoveryStrategy::FallbackImmediate => {
+                    return Some(VerifyResult::unchanged());
+                }
                 CycleRecoveryStrategy::Fixpoint => {
                     return Some(VerifyResult::Unchanged(
                         InputAccumulatedValues::Empty,
@@ -268,15 +272,34 @@ where
             "{database_key_index:?}: validate_provisional(memo = {memo:#?})",
             memo = memo.tracing_debug()
         );
-        if (&memo.revisions.cycle_heads).into_iter().any(|cycle_head| {
-            zalsa
+        for cycle_head in &memo.revisions.cycle_heads {
+            let kind = zalsa
                 .lookup_ingredient(cycle_head.database_key_index.ingredient_index())
-                .is_provisional_cycle_head(
+                .cycle_head_kind(
                     db.as_dyn_database(),
                     cycle_head.database_key_index.key_index(),
-                )
-        }) {
-            return false;
+                );
+            match kind {
+                CycleHeadKind::Provisional => return false,
+                CycleHeadKind::NotProvisional => {
+                    // FIXME: We can ignore this, I just don't have a use-case for this.
+                    if C::CYCLE_STRATEGY == CycleRecoveryStrategy::FallbackImmediate {
+                        panic!("cannot mix fixpoint and `FallbackImmediate` cycles")
+                    }
+                }
+                CycleHeadKind::FallbackImmediate => match C::CYCLE_STRATEGY {
+                    CycleRecoveryStrategy::Panic => {
+                        // Queries without fallback are not considered when inside a cycle.
+                        return false;
+                    }
+                    // FIXME: We can do the same as with `CycleRecoveryStrategy::Panic` here, I just don't have
+                    // a use-case for this.
+                    CycleRecoveryStrategy::Fixpoint => {
+                        panic!("cannot mix fixpoint and `FallbackImmediate` cycles")
+                    }
+                    CycleRecoveryStrategy::FallbackImmediate => {}
+                },
+            }
         }
         // Relaxed is sufficient here because there are no other writes we need to ensure have
         // happened before marking this memo as verified-final.

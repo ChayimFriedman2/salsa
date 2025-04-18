@@ -42,6 +42,13 @@ pub trait Jar: Any {
         Self: Sized;
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CycleHeadKind {
+    Provisional,
+    NotProvisional,
+    FallbackImmediate,
+}
+
 pub trait Ingredient: Any + std::fmt::Debug + Send + Sync {
     fn debug_name(&self) -> &'static str;
 
@@ -61,9 +68,9 @@ pub trait Ingredient: Any + std::fmt::Debug + Send + Sync {
     ///
     /// In the case of nested cycles, we are not asking here whether the value is provisional due
     /// to the outer cycle being unresolved, only whether its own cycle remains provisional.
-    fn is_provisional_cycle_head<'db>(&'db self, db: &'db dyn Database, input: Id) -> bool {
+    fn cycle_head_kind<'db>(&'db self, db: &'db dyn Database, input: Id) -> CycleHeadKind {
         _ = (db, input);
-        false
+        CycleHeadKind::NotProvisional
     }
 
     /// Invoked when the current thread needs to wait for a result for the given `key_index`.
