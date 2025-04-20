@@ -109,6 +109,9 @@ pub(crate) struct Options<A: AllowedOptions> {
     /// functions. This is merely used to refine the query name.
     pub self_ty: Option<syn::Type>,
 
+    /// Force the durability of the query to always be this value.
+    pub force_durability: Option<syn::Expr>,
+
     /// Remember the `A` parameter, which plays no role after parsing.
     phantom: PhantomData<A>,
 }
@@ -135,6 +138,7 @@ impl<A: AllowedOptions> Default for Options<A> {
             revisions: Default::default(),
             heap_size_fn: Default::default(),
             self_ty: Default::default(),
+            force_durability: Default::default(),
         }
     }
 }
@@ -159,6 +163,7 @@ pub(crate) trait AllowedOptions {
     const REVISIONS: bool;
     const HEAP_SIZE: bool;
     const SELF_TY: bool;
+    const FORCE_DURABILITY: bool;
 }
 
 type Equals = syn::Token![=];
@@ -438,6 +443,17 @@ impl<A: AllowedOptions> syn::parse::Parse for Options<A> {
                         "`self_ty` option not allowed here",
                     ));
                 }
+            } else if ident == "force_durability" {
+                if A::FORCE_DURABILITY {
+                    let _eq = Equals::parse(input)?;
+                    let path = syn::Expr::parse(input)?;
+                    options.force_durability = Some(path);
+                } else {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "`force_durability` option not allowed here",
+                    ));
+                }
             } else {
                 return Err(syn::Error::new(
                     ident.span(),
@@ -476,6 +492,7 @@ impl<A: AllowedOptions> quote::ToTokens for Options<A> {
             revisions,
             heap_size_fn,
             self_ty,
+            force_durability,
             phantom: _,
         } = self;
         if let Some(returns) = returns {
@@ -531,6 +548,9 @@ impl<A: AllowedOptions> quote::ToTokens for Options<A> {
         }
         if let Some(self_ty) = self_ty {
             tokens.extend(quote::quote! { self_ty = #self_ty, });
+        }
+        if let Some(force_durability) = force_durability {
+            tokens.extend(quote::quote! { force_durability = #force_durability, });
         }
     }
 }

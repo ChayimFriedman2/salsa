@@ -64,6 +64,8 @@ impl crate::options::AllowedOptions for TrackedStruct {
     const HEAP_SIZE: bool = false;
 
     const SELF_TY: bool = false;
+
+    const FORCE_DURABILITY: bool = false;
 }
 
 impl SalsaStructAllowedOptions for TrackedStruct {

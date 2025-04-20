@@ -959,8 +959,12 @@ impl ActiveQueryGuard<'_> {
     /// which summarizes the other queries that were accessed during this
     /// query's execution.
     #[inline]
-    pub(crate) fn pop(self) -> QueryRevisions {
-        self.complete()
+    pub(crate) fn pop(self, force_durability: Option<Durability>) -> QueryRevisions {
+        let mut result = self.complete();
+        if let Some(durability) = force_durability {
+            result.durability = durability;
+        }
+        result
     }
 }
 

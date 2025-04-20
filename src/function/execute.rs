@@ -78,7 +78,7 @@ where
                         .zalsa_local()
                         .push_query(database_key_index, IterationCount::initial());
                     new_value = C::cycle_initial(db, C::id_to_input(db, id));
-                    revisions = active_query.pop();
+                    revisions = active_query.pop(C::FORCE_DURABILITY);
                     // We need to set `cycle_heads` and `verified_final` because it needs to propagate to the callers.
                     // When verifying this, we will see we have fallback and mark ourselves verified.
                     revisions.set_cycle_heads(cycle_heads);
@@ -282,6 +282,6 @@ where
         // stale, or value is absent. Let's execute!
         let new_value = C::execute(db, C::id_to_input(db, id));
 
-        (new_value, active_query.pop())
+        (new_value, active_query.pop(C::FORCE_DURABILITY))
     }
 }

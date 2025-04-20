@@ -485,6 +485,7 @@ mod _memory_usage {
         type Input<'db> = ();
         type Output<'db> = NonZeroUsize;
         const CYCLE_STRATEGY: CycleRecoveryStrategy = CycleRecoveryStrategy::Panic;
+        const FORCE_DURABILITY: Option<crate::Durability> = None;
 
         fn values_equal<'db>(_: &Self::Output<'db>, _: &Self::Output<'db>) -> bool {
             unimplemented!()

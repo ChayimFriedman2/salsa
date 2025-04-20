@@ -47,6 +47,7 @@ impl AllowedOptions for Accumulator {
     const REVISIONS: bool = false;
     const HEAP_SIZE: bool = false;
     const SELF_TY: bool = false;
+    const FORCE_DURABILITY: bool = false;
 }
 
 struct StructMacro {

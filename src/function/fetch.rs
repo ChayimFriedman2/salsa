@@ -189,7 +189,7 @@ where
                         let active_query =
                             zalsa_local.push_query(database_key_index, IterationCount::initial());
                         let fallback_value = C::cycle_initial(db, C::id_to_input(db, id));
-                        let mut revisions = active_query.pop();
+                        let mut revisions = active_query.pop(C::FORCE_DURABILITY);
                         revisions.set_cycle_heads(CycleHeads::initial(database_key_index));
                         // We need this for `cycle_heads()` to work. We will unset this in the outer `execute()`.
                         *revisions.verified_final.get_mut() = false;

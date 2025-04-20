@@ -64,6 +64,8 @@ macro_rules! setup_tracked_fn {
         // The return mode for the function, see `salsa_macros::options::Option::returns`
         return_mode: $return_mode:tt,
 
+        force_durability: $force_durability:expr,
+
         assert_return_type_is_update: {$($assert_return_type_is_update:tt)*},
 
         $(self_ty: $self_ty:ty,)?
@@ -207,6 +209,8 @@ macro_rules! setup_tracked_fn {
                 type Output<$db_lt> = $output_ty;
 
                 const CYCLE_STRATEGY: $zalsa::CycleRecoveryStrategy = $zalsa::CycleRecoveryStrategy::$cycle_recovery_strategy;
+
+                const FORCE_DURABILITY: Option<$zalsa::Durability> = $force_durability;
 
                 $($values_equal)+
 
