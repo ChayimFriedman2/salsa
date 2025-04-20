@@ -293,4 +293,15 @@ where
     unsafe fn syncs(&self, _current_revision: Revision) -> &SyncTable {
         &self.syncs
     }
+
+    fn size_without_value() -> usize
+    where
+        Self: Sized,
+    {
+        size_of::<Self>() - size_of::<C::Fields>()
+    }
+    
+    fn fields(&self) -> &(dyn Any + 'static) {
+        &self.fields
+    }
 }

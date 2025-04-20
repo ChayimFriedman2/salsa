@@ -167,6 +167,13 @@ impl CycleHeads {
             }
         }
     }
+
+    pub(crate) fn size(&self) -> crate::db_iter::BytesSize {
+        crate::db_iter::BytesSize {
+            total: size_of::<CycleHead>() * self.0.capacity(),
+            used: size_of::<CycleHead>() * self.0.len(),
+        }
+    }
 }
 
 impl IntoIterator for CycleHeads {

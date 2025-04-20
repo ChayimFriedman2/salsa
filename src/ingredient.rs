@@ -2,13 +2,17 @@ use std::any::{Any, TypeId};
 use std::fmt;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use crate::accumulator::accumulated_map::{AccumulatedMap, InputAccumulatedValues};
 use crate::cycle::CycleRecoveryStrategy;
 use crate::function::VerifyResult;
 use crate::plumbing::IngredientIndices;
 use crate::table::memo::MemoTableTypes;
 use crate::table::Table;
-use crate::zalsa::{transmute_data_mut_ptr, transmute_data_ptr, IngredientIndex, Zalsa};
+use crate::zalsa::{
+    transmute_data_mut_ptr, transmute_data_ptr, IngredientIndex, MemoIngredientIndex, Zalsa,
+};
 use crate::zalsa_local::QueryOrigin;
 use crate::{Database, DatabaseKeyIndex, Id, Revision};
 
@@ -168,6 +172,13 @@ pub trait Ingredient: Any + std::fmt::Debug + Send + Sync {
     ) -> (Option<&'db AccumulatedMap>, InputAccumulatedValues) {
         let _ = (db, key_index);
         (None, InputAccumulatedValues::Empty)
+    }
+
+    fn memo_ingredient_index_to_ingredient_map(
+        &self,
+        map: &mut FxHashMap<(IngredientIndex, MemoIngredientIndex), IngredientIndex>,
+    ) {
+        let _ = map;
     }
 }
 

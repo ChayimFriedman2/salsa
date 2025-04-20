@@ -30,6 +30,14 @@ pub(crate) enum ClaimResult<'a> {
 }
 
 impl SyncTable {
+    pub(crate) fn size(&self) -> crate::db_iter::BytesSize {
+        let syncs = self.syncs.lock();
+        crate::db_iter::BytesSize {
+            total: size_of::<Option<SyncState>>() * syncs.capacity(),
+            used: size_of::<Option<SyncState>>() * syncs.len(),
+        }
+    }
+
     #[inline]
     pub(crate) fn claim<'me>(
         &'me self,

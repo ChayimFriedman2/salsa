@@ -18,7 +18,7 @@ use crate::table::sync::SyncTable;
 use crate::table::Table;
 use crate::views::Views;
 use crate::zalsa_local::ZalsaLocal;
-use crate::{Database, Durability, Id, Revision};
+use crate::{Database, DatabaseItem, Durability, Id, Revision};
 
 /// Internal plumbing trait.
 ///
@@ -101,7 +101,7 @@ impl IngredientIndex {
 pub struct MemoIngredientIndex(u32);
 
 impl MemoIngredientIndex {
-    pub(crate) fn from_usize(u: usize) -> Self {
+    pub(crate) const fn from_usize(u: usize) -> Self {
         assert!(u <= u32::MAX as usize);
         MemoIngredientIndex(u as u32)
     }
@@ -257,6 +257,20 @@ impl Zalsa {
         memo_ingredients.push(ingredient_index);
 
         mi
+    }
+
+    pub(crate) fn estimate_database_size(&mut self, callback: &mut dyn FnMut(DatabaseItem<'_>)) {
+        crate::db_iter::estimate_database_size(self, callback);
+    }
+
+    pub(crate) fn memo_ingredient_index_to_ingredient_map(
+        &mut self,
+    ) -> FxHashMap<(IngredientIndex, MemoIngredientIndex), IngredientIndex> {
+        let mut result = FxHashMap::default();
+        for (_, ingredient) in &self.ingredients_vec {
+            ingredient.memo_ingredient_index_to_ingredient_map(&mut result);
+        }
+        result
     }
 }
 

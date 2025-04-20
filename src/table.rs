@@ -51,6 +51,12 @@ pub(crate) trait Slot: Any + Send + Sync {
     ///
     /// The current revision MUST be the current revision of the database containing this slot.
     unsafe fn syncs(&self, current_revision: Revision) -> &SyncTable;
+
+    fn size_without_value() -> usize
+    where
+        Self: Sized;
+
+    fn fields(&self) -> &(dyn Any + 'static);
 }
 
 /// [Slot::memos]
@@ -68,10 +74,12 @@ type SlotSyncsFn<T> = unsafe fn(&T, current_revision: Revision) -> &SyncTable;
 
 struct SlotVTable {
     layout: Layout,
+    size_without_value: fn() -> usize,
     /// [`Slot`] methods
     memos: SlotMemosFnRaw,
     memos_mut: SlotMemosMutFnRaw,
     syncs: SlotSyncsFnRaw,
+    as_dyn_slot: unsafe fn(*const ()) -> *const dyn Slot,
     /// A drop impl to call when the own page drops
     /// SAFETY: The caller is required to supply a correct data pointer to a `Box<PageDataEntry<T>>` and initialized length,
     /// and correct memo types.
@@ -93,6 +101,7 @@ impl SlotVTable {
                     }
                 },
                 layout: Layout::new::<T>(),
+                size_without_value: T::size_without_value,
                 // SAFETY: The signatures are compatible
                 memos: unsafe { mem::transmute::<SlotMemosFn<T>, SlotMemosFnRaw>(T::memos) },
                 // SAFETY: The signatures are compatible
@@ -101,6 +110,7 @@ impl SlotVTable {
                 },
                 // SAFETY: The signatures are compatible
                 syncs: unsafe { mem::transmute::<SlotSyncsFn<T>, SlotSyncsFnRaw>(T::syncs) },
+                as_dyn_slot: |this| this.cast::<T>(),
             }
         }
     }
@@ -109,7 +119,7 @@ impl SlotVTable {
 type PageDataEntry<T> = UnsafeCell<MaybeUninit<T>>;
 type PageData<T> = [PageDataEntry<T>; PAGE_LEN];
 
-struct Page {
+pub(crate) struct Page {
     /// The ingredient for elements on this page.
     ingredient: IngredientIndex,
 
@@ -308,6 +318,10 @@ impl Table {
             .or_default()
             .push(page);
     }
+
+    pub(crate) fn all_pages(&self) -> impl Iterator<Item = &Page> {
+        self.pages.iter().map(|(_, page)| page)
+    }
 }
 
 impl<'p, T: Slot> PageView<'p, T> {
@@ -402,6 +416,39 @@ impl Page {
         } else {
             None
         }
+    }
+
+    pub(crate) fn ingredient(&self) -> IngredientIndex {
+        self.ingredient
+    }
+
+    pub(crate) fn size(&self) -> crate::db_iter::BytesSize {
+        let size_without_value = (self.slot_vtable.size_without_value)();
+        let total = size_of::<Self>() + (size_without_value * PAGE_LEN);
+        let used =
+            size_of::<Self>() + (size_without_value * self.allocated.load(Ordering::Relaxed));
+        crate::db_iter::BytesSize { total, used }
+    }
+
+    pub(crate) fn iter_dyn_slot(&self) -> impl Iterator<Item = &dyn Slot> {
+        let mut ptr = self.data.as_ptr();
+        let len = self.allocated.load(Ordering::Acquire);
+        let item_size = self.slot_vtable.layout.size();
+        let end = ptr.wrapping_byte_add(len * item_size);
+        let as_dyn_slot = self.slot_vtable.as_dyn_slot;
+        std::iter::from_fn(move || {
+            if ptr >= end {
+                return None;
+            }
+            // SAFETY: We walk the array.
+            let result = unsafe { &*as_dyn_slot(ptr) };
+            ptr = ptr.wrapping_byte_add(len);
+            Some(result)
+        })
+    }
+
+    pub(crate) fn memo_types(&self) -> &MemoTableTypes {
+        &self.memo_types
     }
 }
 

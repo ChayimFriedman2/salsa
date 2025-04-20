@@ -25,9 +25,26 @@ pub(crate) struct MemoTable {
     memos: RwLock<ThinVec<MemoEntry>>,
 }
 
+impl MemoTable {
+    pub(crate) fn size(&self) -> crate::db_iter::BytesSize {
+        let memos = self.memos.read();
+        crate::db_iter::BytesSize {
+            total: size_of::<MemoEntry>() * memos.capacity(),
+            used: size_of::<MemoEntry>() * memos.len(),
+        }
+    }
+}
+
 pub trait Memo: Any + Send + Sync {
     /// Returns the `origin` of this memo
     fn origin(&self) -> &QueryOrigin;
+
+    fn size_without_value(&self) -> usize;
+    fn dependencies_size(&self) -> crate::db_iter::BytesSize;
+    fn cycle_heads_size(&self) -> crate::db_iter::BytesSize;
+    fn tracked_struct_ids_size(&self) -> crate::db_iter::BytesSize;
+    /// This returns `Option<V>`, not `V`!
+    fn value(&self) -> &(dyn Any + 'static);
 }
 
 /// Data for a memoized entry.
@@ -121,12 +138,6 @@ impl MemoEntryType {
 /// Dummy placeholder type that we use when erasing the memo type `M` in [`MemoEntryData`][].
 #[derive(Debug)]
 struct DummyMemo {}
-
-impl Memo for DummyMemo {
-    fn origin(&self) -> &QueryOrigin {
-        unreachable!("should not get here")
-    }
-}
 
 /// # Safety
 ///
@@ -248,7 +259,7 @@ impl<'a> MemoTableWithTypes<'a> {
     /// # Safety
     ///
     /// The caller needs to make sure to not drop the returned value until no more references into
-    /// the database exist as there may be outstanding borrows into the `Arc` contents.
+    /// the database exist as there may be outstanding borrows into the memo contents.
     pub(crate) unsafe fn insert<M: Memo>(
         self,
         memo_ingredient_index: MemoIngredientIndex,
@@ -334,6 +345,26 @@ impl<'a> MemoTableWithTypes<'a> {
         }
 
         None
+    }
+
+    pub(crate) fn with_memos(self, mut f: impl FnMut(MemoIngredientIndex, &dyn Memo)) {
+        let memos = self.memos.memos.read();
+        memos
+            .iter()
+            .zip(self.types.load().iter())
+            .zip(0..)
+            .filter_map(|((memo, type_), index)| {
+                let memo = memo.atomic_memo.load(Ordering::Acquire);
+                let memo = NonNull::new(memo)?;
+                Some((memo, type_.load()?, index))
+            })
+            .map(|(memo, type_, index)| {
+                // SAFETY: We converted the memo to the correct type.
+                let memo = unsafe { (type_.to_dyn_fn)(memo).as_ref() };
+                let index = MemoIngredientIndex::from_usize(index);
+                (index, memo)
+            })
+            .for_each(|(index, memo)| f(index, memo));
     }
 }
 

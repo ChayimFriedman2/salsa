@@ -12,7 +12,7 @@ use crate::key::DatabaseKeyIndex;
 use crate::revision::AtomicRevision;
 use crate::table::memo::MemoTableWithTypesMut;
 use crate::zalsa::{MemoIngredientIndex, Zalsa};
-use crate::zalsa_local::{QueryOrigin, QueryRevisions};
+use crate::zalsa_local::{QueryEdge, QueryOrigin, QueryRevisions};
 use crate::{Event, EventKind, Id, Revision};
 
 impl<C: Configuration> IngredientImpl<C> {
@@ -307,5 +307,30 @@ impl<V> Memo<V> {
 impl<V: Send + Sync + Any> crate::table::memo::Memo for Memo<V> {
     fn origin(&self) -> &QueryOrigin {
         &self.revisions.origin
+    }
+
+    fn size_without_value(&self) -> usize {
+        size_of::<Self>() - size_of::<Option<V>>()
+    }
+    fn dependencies_size(&self) -> crate::db_iter::BytesSize {
+        let size = match &self.revisions.origin {
+            QueryOrigin::Derived(deps) | QueryOrigin::DerivedUntracked(deps) => {
+                deps.input_outputs.len() * size_of::<QueryEdge>()
+            }
+            QueryOrigin::Assigned(_) | QueryOrigin::FixpointInitial => 0,
+        };
+        crate::db_iter::BytesSize {
+            total: size,
+            used: size,
+        }
+    }
+    fn cycle_heads_size(&self) -> crate::db_iter::BytesSize {
+        self.revisions.cycle_heads.size()
+    }
+    fn tracked_struct_ids_size(&self) -> crate::db_iter::BytesSize {
+        self.revisions.tracked_struct_ids.size()
+    }
+    fn value(&self) -> &(dyn Any + 'static) {
+        &self.value
     }
 }

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 
 use crate::zalsa::{IngredientIndex, ZalsaDatabase};
-use crate::{Durability, Event, Revision};
+use crate::{DatabaseItem, Durability, Event, Revision};
 
 /// The trait implemented by all Salsa databases.
 /// You can create your own subtraits of this trait using the `#[salsa::db]`(`crate::db`) procedural macro.
@@ -103,6 +103,10 @@ pub trait Database: Send + AsDynDatabase + Any + ZalsaDatabase {
     {
         // No-op
         db
+    }
+
+    fn estimate_database_size(&mut self, callback: &mut dyn FnMut(DatabaseItem<'_>)) {
+        self.zalsa_mut().estimate_database_size(callback)
     }
 }
 

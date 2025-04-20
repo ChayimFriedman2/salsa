@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 pub(crate) use maybe_changed_after::VerifyResult;
+use rustc_hash::FxHashMap;
 
 use crate::accumulator::accumulated_map::{AccumulatedMap, InputAccumulatedValues};
 use crate::cycle::{CycleRecoveryAction, CycleRecoveryStrategy};
@@ -344,6 +345,17 @@ where
     ) -> (Option<&'db AccumulatedMap>, InputAccumulatedValues) {
         let db = self.view_caster.downcast(db);
         self.accumulated_map(db, key_index)
+    }
+
+    fn memo_ingredient_index_to_ingredient_map(
+        &self,
+        map: &mut FxHashMap<(IngredientIndex, MemoIngredientIndex), IngredientIndex>,
+    ) {
+        map.extend(
+            self.memo_ingredient_indices
+                .iter()
+                .map(|key| (key, self.index)),
+        );
     }
 }
 

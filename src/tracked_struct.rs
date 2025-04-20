@@ -1,6 +1,6 @@
 #![allow(clippy::undocumented_unsafe_blocks)] // TODO(#697) document safety
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -232,6 +232,10 @@ impl Clone for IdentityMap {
 }
 
 impl IdentityMap {
+    pub(crate) fn size(&self) -> crate::db_iter::BytesSize {
+        crate::db_iter::BytesSize::of_hash_map(&self.map)
+    }
+
     pub(crate) fn insert(&mut self, key: Identity, id: Id) -> Option<Id> {
         use hashbrown::hash_map::RawEntryMut;
 
@@ -889,6 +893,17 @@ where
         // when deleting a tracked struct.
         self.read_lock(current_revision);
         &self.syncs
+    }
+
+    fn size_without_value() -> usize
+    where
+        Self: Sized,
+    {
+        size_of::<Self>() - size_of::<C::Fields<'static>>()
+    }
+    
+    fn fields(&self) -> &(dyn Any + 'static) {
+        &self.fields
     }
 }
 

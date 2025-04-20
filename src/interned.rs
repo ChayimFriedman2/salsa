@@ -1,6 +1,6 @@
 #![allow(clippy::undocumented_unsafe_blocks)] // TODO(#697) document safety
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::fmt;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
@@ -444,6 +444,17 @@ where
     #[inline(always)]
     unsafe fn syncs(&self, _current_revision: Revision) -> &crate::table::sync::SyncTable {
         &self.syncs
+    }
+
+    fn size_without_value() -> usize
+    where
+        Self: Sized,
+    {
+        size_of::<Self>() - size_of::<C::Fields<'static>>()
+    }
+
+    fn fields(&self) -> &(dyn Any + 'static) {
+        &self.fields
     }
 }
 

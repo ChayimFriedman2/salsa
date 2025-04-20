@@ -58,6 +58,9 @@ pub trait NewMemoIngredientIndices {
     ) -> Self;
 }
 
+const EMPTY_MEMO_INGREDIENT: MemoIngredientIndex =
+    MemoIngredientIndex::from_usize((u32::MAX - 1) as usize);
+
 impl NewMemoIngredientIndices for MemoIngredientIndices {
     /// # Safety
     ///
@@ -77,10 +80,7 @@ impl NewMemoIngredientIndices for MemoIngredientIndices {
             unreachable!("Attempting to construct struct memo mapping for non tracked function?")
         };
         let mut indices = Vec::new();
-        indices.resize(
-            last.as_usize() + 1,
-            MemoIngredientIndex::from_usize((u32::MAX - 1) as usize),
-        );
+        indices.resize(last.as_usize() + 1, EMPTY_MEMO_INGREDIENT);
         for &struct_ingredient in &struct_indices.indices {
             let memo_types = zalsa
                 .lookup_ingredient(struct_ingredient)
@@ -128,19 +128,39 @@ impl MemoIngredientMap for MemoIngredientIndices {
     fn get(&self, index: IngredientIndex) -> MemoIngredientIndex {
         self.indices[index.as_usize()]
     }
+    #[inline]
+    fn iter(&self) -> impl Iterator<Item = (IngredientIndex, MemoIngredientIndex)> {
+        self.indices
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(_, memo_ingredient_index)| memo_ingredient_index != EMPTY_MEMO_INGREDIENT)
+            .map(|(ingredient_index, memo_ingredient_index)| {
+                (
+                    IngredientIndex::from(ingredient_index),
+                    memo_ingredient_index,
+                )
+            })
+    }
 }
 
 #[derive(Debug)]
-pub struct MemoIngredientSingletonIndex(MemoIngredientIndex);
+pub struct MemoIngredientSingletonIndex {
+    memo_ingredient_index: MemoIngredientIndex,
+    ingredient_index: IngredientIndex,
+}
 
 impl MemoIngredientMap for MemoIngredientSingletonIndex {
     #[inline(always)]
     fn get_zalsa_id(&self, _: &Zalsa, _: Id) -> MemoIngredientIndex {
-        self.0
+        self.memo_ingredient_index
     }
     #[inline(always)]
     fn get(&self, _: IngredientIndex) -> MemoIngredientIndex {
-        self.0
+        self.memo_ingredient_index
+    }
+    fn iter(&self) -> impl Iterator<Item = (IngredientIndex, MemoIngredientIndex)> {
+        std::iter::once((self.ingredient_index, self.memo_ingredient_index))
     }
 }
 
@@ -166,11 +186,15 @@ impl NewMemoIngredientIndices for MemoIngredientSingletonIndex {
         let mi = zalsa.next_memo_ingredient_index(struct_ingredient, ingredient);
         memo_types.set(mi, &memo_type, zalsa);
 
-        Self(mi)
+        Self {
+            memo_ingredient_index: mi,
+            ingredient_index: struct_ingredient,
+        }
     }
 }
 
 pub trait MemoIngredientMap: Send + Sync {
     fn get_zalsa_id(&self, zalsa: &Zalsa, id: Id) -> MemoIngredientIndex;
     fn get(&self, index: IngredientIndex) -> MemoIngredientIndex;
+    fn iter(&self) -> impl Iterator<Item = (IngredientIndex, MemoIngredientIndex)>;
 }

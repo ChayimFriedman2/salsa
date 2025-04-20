@@ -9,6 +9,7 @@ mod cancelled;
 mod cycle;
 mod database;
 mod database_impl;
+mod db_iter;
 mod durability;
 mod event;
 mod function;
@@ -54,6 +55,7 @@ pub use self::storage::Storage;
 pub use self::update::Update;
 pub use self::zalsa::IngredientIndex;
 pub use crate::attach::with_attached_database;
+pub use crate::db_iter::{BytesSize, DatabaseItem};
 
 pub mod prelude {
     pub use crate::{Accumulator, Database, Setter};
