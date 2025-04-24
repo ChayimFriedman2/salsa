@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/ChayimFriedman2/salsa/compare/salsa-v0.20.0...salsa-v0.21.0) - 2025-04-24
+
+### Other
+
+- Use `DatabaseKey` for interned events ([#813](https://github.com/ChayimFriedman2/salsa/pull/813))
+- [refactor] More `fetch_hot` simplification ([#793](https://github.com/ChayimFriedman2/salsa/pull/793))
+- Don't store the fields in the interned map ([#812](https://github.com/ChayimFriedman2/salsa/pull/812))
+- Fix ci not always running ([#810](https://github.com/ChayimFriedman2/salsa/pull/810))
+
 ## [0.20.0](https://github.com/salsa-rs/salsa/compare/salsa-v0.19.0...salsa-v0.20.0) - 2025-04-22
 
 ### Added
