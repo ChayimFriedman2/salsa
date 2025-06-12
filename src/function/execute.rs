@@ -1,10 +1,11 @@
 use crate::cycle::{CycleRecoveryStrategy, IterationCount};
-use crate::function::memo::Memo;
-use crate::function::{Configuration, IngredientImpl};
+use crate::function::memo::{Memo, NeverChangeMemo};
+use crate::function::{Configuration, EitherMemoRef, IngredientImpl};
 use crate::sync::atomic::{AtomicBool, Ordering};
+use crate::table::memo::Either;
 use crate::zalsa::{MemoIngredientIndex, Zalsa, ZalsaDatabase};
 use crate::zalsa_local::{ActiveQueryGuard, QueryRevisions};
-use crate::{Event, EventKind, Id, Revision};
+use crate::{Durability, Event, EventKind, Id, Revision};
 
 impl<C> IngredientImpl<C>
 where
@@ -24,10 +25,15 @@ where
         &'db self,
         db: &'db C::DbView,
         active_query: ActiveQueryGuard<'db>,
-        opt_old_memo: Option<&Memo<'db, C>>,
-    ) -> &'db Memo<'db, C> {
+        opt_old_memo: Option<EitherMemoRef<'db, 'db, C>>,
+    ) -> EitherMemoRef<'db, 'db, C> {
         let database_key_index = active_query.database_key_index;
         let id = database_key_index.key_index();
+
+        let opt_old_memo = opt_old_memo.and_then(|old_memo| match old_memo {
+            Either::Left(it) => Some(it),
+            Either::Right(_) => None,
+        });
 
         tracing::info!("{:?}: executing query", database_key_index);
         let zalsa = db.zalsa();
@@ -56,18 +62,21 @@ where
                     // Did the new result we got depend on our own provisional value, in a cycle?
                     if cycle_heads.contains(&database_key_index) {
                         // Ignore the computed value, leave the fallback value there.
-                        let memo = self
+                        let Either::Left(memo) = self
                             .get_memo_from_table_for(zalsa, id, memo_ingredient_index)
                             .unwrap_or_else(|| {
                                 unreachable!(
                                     "{database_key_index:#?} is a `FallbackImmediate` cycle head, \
                                         but no memo found"
                                 )
-                            });
+                            })
+                        else {
+                            unreachable!("cycle participants cannot be `NeverChangeMemo`s")
+                        };
                         // We need to mark the memo as finalized so other cycle participants that have fallbacks
                         // will be verified (participants that don't have fallbacks will not be verified).
                         memo.revisions.verified_final.store(true, Ordering::Release);
-                        return memo;
+                        return Either::Left(memo);
                     }
 
                     // If we're in the middle of a cycle and we have a fallback, use it instead.
@@ -108,12 +117,27 @@ where
             // outputs and update the tracked struct IDs for seeding the next revision.
             self.diff_outputs(zalsa, database_key_index, old_memo, &mut revisions);
         }
-        self.insert_memo(
-            zalsa,
-            id,
-            Memo::new(Some(new_value), zalsa.current_revision(), revisions),
-            memo_ingredient_index,
-        )
+        return if revisions.durability == Durability::NEVER_CHANGE
+            && revisions.cycle_heads().is_empty()
+        {
+            // Only insert a `NeverChangeMemo` if we are not inside a cycle, or the cycle completed successfully.
+            // Cycles need dependency tracking.
+            self.insert_never_change_memo(
+                zalsa,
+                id,
+                NeverChangeMemo {
+                    value: Some(new_value),
+                },
+                memo_ingredient_index,
+            )
+        } else {
+            Either::Left(self.insert_memo(
+                zalsa,
+                id,
+                Memo::new(Some(new_value), zalsa.current_revision(), revisions),
+                memo_ingredient_index,
+            ))
+        };
     }
 
     #[inline]
@@ -164,6 +188,12 @@ where
                                         but no provisional memo found"
                             )
                         });
+                    let Either::Left(memo) = memo else {
+                        panic!(
+                            "during a cycle, no `NeverChangeMemo` is \
+                            inserted as fallback"
+                        );
+                    };
                     debug_assert!(memo.may_be_provisional());
                     memo.value.as_ref()
                 };

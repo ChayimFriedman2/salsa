@@ -16,12 +16,14 @@ use crate::key::DatabaseKeyIndex;
 use crate::plumbing::MemoIngredientMap;
 use crate::salsa_struct::SalsaStructInDb;
 use crate::sync::Arc;
-use crate::table::memo::MemoTableTypes;
+use crate::table::memo::{Either, MemoTableTypes};
 use crate::table::Table;
 use crate::views::DatabaseDownCaster;
 use crate::zalsa::{IngredientIndex, MemoIngredientIndex, Zalsa};
 use crate::zalsa_local::QueryOriginRef;
 use crate::{Database, Durability, Id, Revision};
+
+pub use crate::function::memo::AmbiguousMemo;
 
 mod accumulated;
 mod backdate;
@@ -36,7 +38,9 @@ mod memo;
 mod specify;
 mod sync;
 
-pub type Memo<C> = memo::Memo<'static, C>;
+type EitherMemoNonNull<'db, C> =
+    Either<NonNull<memo::Memo<'db, C>>, NonNull<memo::NeverChangeMemo<'db, C>>>;
+type EitherMemoRef<'a, 'db, C> = Either<&'a memo::Memo<'db, C>, &'a memo::NeverChangeMemo<'db, C>>;
 
 pub trait Configuration: Any {
     const DEBUG_NAME: &'static str;
@@ -186,10 +190,19 @@ where
     /// when this function is called and (b) ensuring that any entries
     /// removed from the memo-map are added to `deleted_entries`, which is
     /// only cleared with `&mut self`.
+    #[inline]
     unsafe fn extend_memo_lifetime<'this>(
         &'this self,
         memo: &memo::Memo<'this, C>,
     ) -> &'this memo::Memo<'this, C> {
+        // SAFETY: the caller must guarantee that the memo will not be released before `&self`
+        unsafe { std::mem::transmute(memo) }
+    }
+    #[inline]
+    unsafe fn extend_either_memo_lifetime<'this>(
+        &'this self,
+        memo: EitherMemoRef<'_, 'this, C>,
+    ) -> EitherMemoRef<'this, 'this, C> {
         // SAFETY: the caller must guarantee that the memo will not be released before `&self`
         unsafe { std::mem::transmute(memo) }
     }
@@ -222,6 +235,39 @@ where
         }
         // SAFETY: memo has been inserted into the table
         unsafe { self.extend_memo_lifetime(memo.as_ref()) }
+    }
+
+    fn insert_never_change_memo<'db>(
+        &'db self,
+        zalsa: &'db Zalsa,
+        id: Id,
+        memo: memo::NeverChangeMemo<'db, C>,
+        memo_ingredient_index: MemoIngredientIndex,
+    ) -> EitherMemoRef<'db, 'db, C> {
+        // We convert to a `NonNull` here as soon as possible because we are going to alias
+        // into the `Box`, which is a `noalias` type.
+        // SAFETY: memo is not null
+        let memo = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(memo))) };
+
+        // SAFETY: memo must be in the map (it's not yet, but it will be by the time this
+        // value is returned) and anything removed from map is added to deleted entries (ensured elsewhere).
+        let db_memo = unsafe { self.extend_either_memo_lifetime(Either::Right(memo.as_ref())) };
+
+        if let Some(old_value) =
+            // SAFETY: We delay the drop of `old_value` until a new revision starts which ensures no
+            // references will exist for the memo contents.
+            unsafe {
+                self.insert_never_change_memo_into_table_for(zalsa, id, memo, memo_ingredient_index)
+            }
+        {
+            // In case there is a reference to the old memo out there, we have to store it
+            // in the deleted entries. This will get cleared when a new revision starts.
+            //
+            // SAFETY: Once the revision starts, there will be no outstanding borrows to the
+            // memo contents, and so it will be safe to free.
+            unsafe { self.deleted_entries.push(old_value) };
+        }
+        db_memo
     }
 
     #[inline]
@@ -259,8 +305,11 @@ where
     /// Otherwise, the value is still provisional. For both final and provisional, it also
     /// returns the iteration in which this memo was created (always 0 except for cycle heads).
     fn provisional_status(&self, zalsa: &Zalsa, input: Id) -> Option<ProvisionalStatus> {
-        let memo =
-            self.get_memo_from_table_for(zalsa, input, self.memo_ingredient_index(zalsa, input))?;
+        let Either::Left(memo) =
+            self.get_memo_from_table_for(zalsa, input, self.memo_ingredient_index(zalsa, input))?
+        else {
+            return Some(ProvisionalStatus::FinalNeverChange);
+        };
 
         let iteration = memo.revisions.iteration();
         let verified_final = memo.revisions.verified_final.load(Ordering::Relaxed);
@@ -278,7 +327,10 @@ where
 
     fn cycle_heads<'db>(&self, zalsa: &'db Zalsa, input: Id) -> &'db CycleHeads {
         self.get_memo_from_table_for(zalsa, input, self.memo_ingredient_index(zalsa, input))
-            .map(|memo| memo.cycle_heads())
+            .map(|memo| match memo {
+                Either::Left(memo) => memo.cycle_heads(),
+                Either::Right(_) => empty_cycle_heads(),
+            })
             .unwrap_or(empty_cycle_heads())
     }
 

@@ -134,6 +134,7 @@ impl IterationCount {
 pub struct CycleHeads(ThinVec<CycleHead>);
 
 impl CycleHeads {
+    #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -251,6 +252,7 @@ pub(crate) fn empty_cycle_heads() -> &'static CycleHeads {
 pub enum ProvisionalStatus {
     Provisional { iteration: IterationCount },
     Final { iteration: IterationCount },
+    FinalNeverChange,
     FallbackImmediate,
 }
 
@@ -260,6 +262,7 @@ impl ProvisionalStatus {
             ProvisionalStatus::Provisional { iteration } => Some(*iteration),
             ProvisionalStatus::Final { iteration } => Some(*iteration),
             ProvisionalStatus::FallbackImmediate => None,
+            ProvisionalStatus::FinalNeverChange => None,
         }
     }
 }

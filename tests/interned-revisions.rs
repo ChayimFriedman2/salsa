@@ -10,6 +10,7 @@ use test_log::test;
 #[salsa::input]
 struct Input {
     field1: usize,
+    dummy: (),
 }
 
 #[salsa::interned(revisions = 3)]
@@ -42,7 +43,7 @@ fn test_intern_new() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     let result_in_rev_1 = function(&db, input);
     assert_eq!(result_in_rev_1.field1(&db).0, 0);
@@ -75,7 +76,7 @@ fn test_reintern() {
 
     let mut db = common::EventLoggerDatabase::default();
 
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
     let result_in_rev_1 = function(&db, input);
     db.assert_logs(expect![[r#"
         [
@@ -105,11 +106,14 @@ fn test_reintern() {
 fn test_durability() {
     #[salsa::tracked]
     fn function<'db>(db: &'db dyn Database, _input: Input) -> Interned<'db> {
+        // Dummy read so the durability won't be `NEVER_CHANGE`. We can't read `field` because we
+        // want to not depend on it, as we change it later.
+        _ = _input.dummy(db);
         Interned::new(db, BadHash(0))
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     let result_in_rev_1 = function(&db, input);
     assert_eq!(result_in_rev_1.field1(&db).0, 0);
@@ -128,6 +132,7 @@ fn test_durability() {
             "DidInternValue { key: Interned(Id(400)), revision: R1 }",
             "DidSetCancellationFlag",
             "WillCheckCancellation",
+            "DidValidateInternedValue { key: Interned(Id(400)), revision: R2 }",
             "DidValidateMemoizedValue { database_key: function(Id(0)) }",
         ]"#]]);
 }
@@ -146,7 +151,7 @@ fn test_immortal() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     let result = function(&db, input);
     assert_eq!(result.field1(&db).0, 0);
@@ -170,7 +175,7 @@ fn test_reuse() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     let result = function(&db, input);
     assert_eq!(result.field1(&db).0, 0);
@@ -188,7 +193,7 @@ fn test_reuse() {
 
     // Values that have been reused should be re-interned.
     for i in 1..10 {
-        let result = function(&db, Input::new(&db, i));
+        let result = function(&db, Input::new(&db, i, ()));
         assert_eq!(result.field1(&db).0, i);
     }
 
@@ -276,7 +281,7 @@ fn test_reuse_indirect() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::builder(0).durability(Durability::LOW).new(&db);
+    let input = Input::builder(0, ()).durability(Durability::LOW).new(&db);
 
     // Intern `i0`.
     let i0 = intern(&db, input, 0);
@@ -321,7 +326,7 @@ fn test_reuse_interned_input() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     // Create and use I0 in R0.
     let interned = create_interned(&db, input);
@@ -381,7 +386,7 @@ fn test_reuse_multiple_interned_input() {
     }
 
     let mut db = common::EventLoggerDatabase::default();
-    let input = Input::new(&db, 0);
+    let input = Input::new(&db, 0, ());
 
     // Create and use NI0, which wraps I0, in R0.
     let interned = create_interned(&db, input);
@@ -427,8 +432,8 @@ fn test_durability_increase() {
 
     let mut db = common::EventLoggerDatabase::default();
 
-    let high_durability = Input::builder(0).durability(Durability::HIGH).new(&db);
-    let low_durability = Input::builder(1).durability(Durability::LOW).new(&db);
+    let high_durability = Input::builder(0, ()).durability(Durability::HIGH).new(&db);
+    let low_durability = Input::builder(1, ()).durability(Durability::LOW).new(&db);
 
     // Intern `i0`.
     let _i0 = intern(&db, low_durability, 0);

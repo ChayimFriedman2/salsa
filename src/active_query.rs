@@ -90,12 +90,15 @@ impl ActiveQuery {
     ) {
         self.durability = self.durability.min(durability);
         self.changed_at = self.changed_at.max(changed_at);
-        self.input_outputs.insert(QueryEdge::input(input));
         self.accumulated_inputs = self.accumulated_inputs.or_else(|| match has_accumulated {
             true => InputAccumulatedValues::Any,
             false => accumulated_inputs.load(),
         });
         self.cycle_heads.extend(cycle_heads);
+        if !cycle_heads.is_empty() || durability != Durability::NEVER_CHANGE {
+            // During cycles we need to record dependencies.
+            self.input_outputs.insert(QueryEdge::input(input));
+        }
     }
 
     pub(super) fn add_read_simple(
@@ -106,7 +109,9 @@ impl ActiveQuery {
     ) {
         self.durability = self.durability.min(durability);
         self.changed_at = self.changed_at.max(revision);
-        self.input_outputs.insert(QueryEdge::input(input));
+        if durability != Durability::NEVER_CHANGE {
+            self.input_outputs.insert(QueryEdge::input(input));
+        }
     }
 
     pub(super) fn add_untracked_read(&mut self, changed_at: Revision) {
@@ -127,7 +132,9 @@ impl ActiveQuery {
 
     /// Adds a key to our list of outputs.
     pub(super) fn add_output(&mut self, key: DatabaseKeyIndex) {
-        self.input_outputs.insert(QueryEdge::output(key));
+        if self.durability != Durability::NEVER_CHANGE {
+            self.input_outputs.insert(QueryEdge::output(key));
+        }
     }
 
     /// True if the given key was output by this query.
