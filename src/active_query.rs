@@ -146,6 +146,7 @@ impl ActiveQuery {
         self.disambiguator_map.disambiguate(key)
     }
 
+    #[inline]
     pub(super) fn stamp(&self) -> Stamp {
         Stamp {
             durability: self.durability,
@@ -163,6 +164,11 @@ impl ActiveQuery {
 
     pub(crate) fn tracked_struct_ids_mut(&mut self) -> &mut IdentityMap {
         &mut self.tracked_struct_ids
+    }
+
+    #[inline]
+    pub(crate) fn cycle_heads(&self) -> &CycleHeads {
+        &self.cycle_heads
     }
 }
 

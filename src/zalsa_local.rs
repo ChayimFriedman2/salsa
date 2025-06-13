@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::cell::RefCell;
 use std::panic::UnwindSafe;
 use std::ptr::{self, NonNull};
@@ -11,6 +12,7 @@ use crate::active_query::QueryStack;
 use crate::cycle::{empty_cycle_heads, CycleHeads, IterationCount};
 use crate::durability::Durability;
 use crate::key::DatabaseKeyIndex;
+use crate::plumbing::DummyIngredient;
 use crate::runtime::Stamp;
 use crate::sync::atomic::AtomicBool;
 use crate::table::{PageIndex, Slot, Table};
@@ -54,15 +56,39 @@ impl ZalsaLocal {
     /// Allocate a new id in `table` for the given ingredient
     /// storing `value`. Remembers the most recent page from this
     /// thread and attempts to reuse it.
+    #[inline]
     pub(crate) fn allocate<T: Slot>(
         &self,
         zalsa: &Zalsa,
         ingredient: IngredientIndex,
+        value: impl FnOnce(Id) -> T,
+    ) -> Id {
+        self.allocate_with_two_ingredients(zalsa, ingredient, ingredient, value)
+    }
+
+    /// This function is similar to `allocate()`, but allows you to use different ingredients
+    /// for the **page key in the pages map** and **the ingredient the page stores**.
+    ///
+    /// This is useful when one ingredient wants to have multiple slot types. It reserves
+    /// a bunch of [`DummyIngredient`] (as much as needed) then uses them as the `key_ingredient`.
+    /// For the `page_ingredient` it uses itself. That means slots will still be associated with it,
+    /// but since different pages can have different slot types, it can have as many slot types
+    /// as it wants.
+    pub(crate) fn allocate_with_two_ingredients<T: Slot>(
+        &self,
+        zalsa: &Zalsa,
+        key_ingredient: IngredientIndex,
+        page_ingredient: IngredientIndex,
         mut value: impl FnOnce(Id) -> T,
     ) -> Id {
+        debug_assert!(
+            key_ingredient == page_ingredient
+                || zalsa.lookup_ingredient(key_ingredient).type_id()
+                    == TypeId::of::<DummyIngredient>()
+        );
         let memo_types = || {
             zalsa
-                .lookup_ingredient(ingredient)
+                .lookup_ingredient(page_ingredient)
                 .memo_table_types()
                 .clone()
         };
@@ -70,11 +96,11 @@ impl ZalsaLocal {
         let mut page = *self
             .most_recent_pages
             .borrow_mut()
-            .entry(ingredient)
+            .entry(key_ingredient)
             .or_insert_with(|| {
                 zalsa
                     .table()
-                    .fetch_or_push_page::<T>(ingredient, memo_types)
+                    .fetch_or_push_page::<T>(key_ingredient, page_ingredient, memo_types)
             });
 
         loop {
@@ -89,8 +115,10 @@ impl ZalsaLocal {
                 // it is unlikely that there is a non-full one available.
                 Err(v) => {
                     value = v;
-                    page = zalsa.table().push_page::<T>(ingredient, memo_types());
-                    self.most_recent_pages.borrow_mut().insert(ingredient, page);
+                    page = zalsa.table().push_page::<T>(page_ingredient, memo_types());
+                    self.most_recent_pages
+                        .borrow_mut()
+                        .insert(key_ingredient, page);
                 }
             }
         }
@@ -145,6 +173,18 @@ impl ZalsaLocal {
             stack
                 .last()
                 .map(|active_query| (active_query.database_key_index, active_query.stamp()))
+        })
+    }
+
+    /// Returns whether the active query is considered of `Durability::NEVER_CHANGE`.
+    /// That means it has this durability and it doesn't participate in a cycle.
+    #[inline]
+    pub(crate) fn is_currently_never_change(&self) -> bool {
+        self.with_query_stack(|stack| {
+            stack.last().is_some_and(|active_query| {
+                active_query.stamp().durability == Durability::NEVER_CHANGE
+                    && active_query.cycle_heads().is_empty()
+            })
         })
     }
 

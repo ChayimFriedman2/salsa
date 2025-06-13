@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 
 use crate::sync::atomic::{AtomicUsize, Ordering};
 use crate::sync::{Arc, Mutex};
-use crate::table::memo::{MemoTableTypes, MemoTableWithTypes, MemoTableWithTypesMut};
+use crate::table::memo::{Either, MemoTableTypes, MemoTableWithTypes, MemoTableWithTypesMut};
 use crate::{Id, IngredientIndex, Revision};
 
 pub(crate) mod memo;
@@ -185,6 +185,16 @@ impl Table {
         &page_ref.data()[slot.0]
     }
 
+    pub(crate) fn get_one_of<True: Slot, False: Slot>(&self, id: Id) -> Either<&True, &False> {
+        let (page, slot) = split_id(id);
+        let page_ref = &self.pages[page.0];
+        if let Some(result) = page_ref.try_assert_type::<True>() {
+            Either::Left(&result.data()[slot.0])
+        } else {
+            Either::Right(&page_ref.assert_type::<False>().data()[slot.0])
+        }
+    }
+
     /// Get a raw pointer to the data for `id`, which must have been allocated from this table.
     ///
     /// # Panics
@@ -263,18 +273,19 @@ impl Table {
 
     pub(crate) fn fetch_or_push_page<T: Slot>(
         &self,
-        ingredient: IngredientIndex,
+        key_ingredient: IngredientIndex,
+        page_ingredient: IngredientIndex,
         memo_types: impl FnOnce() -> Arc<MemoTableTypes>,
     ) -> PageIndex {
         if let Some(page) = self
             .non_full_pages
             .lock()
-            .get_mut(&ingredient)
+            .get_mut(&key_ingredient)
             .and_then(Vec::pop)
         {
             return page;
         }
-        self.push_page::<T>(ingredient, memo_types())
+        self.push_page::<T>(page_ingredient, memo_types())
     }
 
     pub(crate) fn record_unfilled_page(&self, ingredient: IngredientIndex, page: PageIndex) {
@@ -378,6 +389,15 @@ impl Page {
             self.data
                 .as_ptr()
                 .byte_add(slot.0 * self.slot_vtable.layout.size())
+        }
+    }
+
+    #[inline]
+    fn try_assert_type<T: Slot>(&self) -> Option<PageView<'_, T>> {
+        if self.slot_type_id == TypeId::of::<T>() {
+            Some(PageView(self, PhantomData))
+        } else {
+            None
         }
     }
 

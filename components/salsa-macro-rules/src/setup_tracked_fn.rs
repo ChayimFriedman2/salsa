@@ -283,6 +283,9 @@ macro_rules! setup_tracked_fn {
                         let intern_ingredient = <$zalsa::interned::IngredientImpl<$Configuration>>::new(
                             first_index.successor(0)
                         );
+                        let secondary_intern_ingredient = <$zalsa::DummyIngredient>::new(
+                            first_index.successor(1)
+                        );
                     }
 
                     let intern_ingredient_memo_types = $zalsa::macro_if! {
@@ -314,6 +317,7 @@ macro_rules! setup_tracked_fn {
                             vec![
                                 Box::new(fn_ingredient),
                                 Box::new(intern_ingredient),
+                                Box::new(secondary_intern_ingredient),
                             ]
                         } else {
                             vec![

@@ -8,6 +8,7 @@ mod cancelled;
 mod cycle;
 mod database;
 mod database_impl;
+mod dummy_ingredient;
 mod durability;
 mod event;
 mod function;
@@ -87,6 +88,7 @@ pub mod plumbing {
     pub use crate::attach::{attach, with_attached_database};
     pub use crate::cycle::{CycleRecoveryAction, CycleRecoveryStrategy};
     pub use crate::database::{current_revision, Database};
+    pub use crate::dummy_ingredient::DummyIngredient;
     pub use crate::durability::Durability;
     pub use crate::id::{AsId, FromId, FromIdWithDb, Id};
     pub use crate::ingredient::{Ingredient, Jar, Location};
