@@ -242,7 +242,8 @@ where
                 claim_guard,
                 old_memo,
             } => {
-                let old_memo = old_memo.downcast::<C>();
+                // SAFETY: We pass the correct `IngredientIndex`, and the user cannot mess with them.
+                let old_memo = unsafe { old_memo.downcast::<C>() };
 
                 if old_memo.value.is_none() {
                     return Some(VerifyResult::changed());

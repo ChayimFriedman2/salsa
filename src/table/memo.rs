@@ -1,4 +1,6 @@
-use std::any::{Any, TypeId};
+use std::any::Any;
+#[cfg(debug_assertions)]
+use std::any::TypeId;
 use std::fmt::Debug;
 use std::mem;
 use std::ptr::{self, NonNull};
@@ -202,6 +204,7 @@ impl Drop for LazyMemoEntries {
 #[derive(Clone, Copy, Debug)]
 pub struct MemoEntryType {
     /// The `type_id` of the erased memo type `M`
+    #[cfg(debug_assertions)]
     type_id: TypeId,
 
     /// A type-coercion function for the erased memo type `M`.
@@ -212,6 +215,7 @@ impl MemoEntryType {
     #[inline]
     pub fn of<M: Memo>() -> Self {
         Self {
+            #[cfg(debug_assertions)]
             type_id: TypeId::of::<M>(),
             to_dyn_fn: Self::to_dyn_fn::<M>(),
         }
@@ -346,7 +350,10 @@ impl<'a> MemoSlot<'a> {
 }
 
 impl<'a> MemoTableWithTypes<'a> {
-    pub(crate) fn insert<M: Memo>(
+    /// # Safety
+    ///
+    /// The memo type must match, meaning the `MemoIngredientIndex` must be correct.
+    pub(crate) unsafe fn insert<M: Memo>(
         self,
         memo_ingredient_index: MemoIngredientIndex,
         memo: NonNull<M>,
@@ -356,48 +363,46 @@ impl<'a> MemoTableWithTypes<'a> {
             .memos
             .get_or_init(memo_ingredient_index.as_usize())?;
 
-        // SAFETY: Any indices that are in-bounds for the `MemoTable` are also in-bounds for its
-        // corresponding `MemoTableTypes`, by construction.
-        let type_ = unsafe {
-            self.types
-                .types
-                .get_unchecked(memo_ingredient_index.as_usize())
-        };
+        #[cfg(debug_assertions)]
+        {
+            let type_ = &self.types.types[memo_ingredient_index.as_usize()];
 
-        // Verify that the we are casting to the correct type.
-        if type_.type_id != TypeId::of::<M>() {
-            type_assert_failed(memo_ingredient_index);
+            // Verify that the we are casting to the correct type.
+            if type_.type_id != TypeId::of::<M>() {
+                type_assert_failed(memo_ingredient_index);
+            }
         }
 
         let old_memo = atomic_memo.swap(MemoEntryType::to_dummy(memo).as_ptr(), Ordering::AcqRel);
 
-        // SAFETY: We asserted that the type is correct above.
+        // SAFETY: Our precondition.
         NonNull::new(old_memo).map(|old_memo| unsafe { MemoEntryType::from_dummy(old_memo) })
     }
 
     /// Returns a pointer to the memo at the given index, if one has been inserted.
+    ///
+    /// # Safety
+    ///
+    /// The memo type must match, meaning the `MemoIngredientIndex` must be correct.
     #[inline]
-    pub(crate) fn get<M: Memo>(
+    pub(crate) unsafe fn get<M: Memo>(
         self,
         memo_ingredient_index: MemoIngredientIndex,
     ) -> Option<NonNull<M>> {
         let MemoEntry { atomic_memo } = self.memos.memos.get(memo_ingredient_index.as_usize())?;
 
-        // SAFETY: Any indices that are in-bounds for the `MemoTable` are also in-bounds for its
-        // corresponding `MemoTableTypes`, by construction.
-        let type_ = unsafe {
-            self.types
-                .types
-                .get_unchecked(memo_ingredient_index.as_usize())
-        };
+        #[cfg(debug_assertions)]
+        {
+            let type_ = &self.types.types[memo_ingredient_index.as_usize()];
 
-        // Verify that the we are casting to the correct type.
-        if type_.type_id != TypeId::of::<M>() {
-            type_assert_failed(memo_ingredient_index);
+            // Verify that the we are casting to the correct type.
+            if type_.type_id != TypeId::of::<M>() {
+                type_assert_failed(memo_ingredient_index);
+            }
         }
 
+        // SAFETY: Our precondition.
         NonNull::new(atomic_memo.load(Ordering::Acquire))
-            // SAFETY: We asserted that the type is correct above.
             .map(|memo| unsafe { MemoEntryType::from_dummy(memo) })
     }
 
@@ -428,7 +433,14 @@ impl<'a> MemoTableWithTypes<'a> {
         // base address, with spatial provenance covering the allocation, paired with `type_`; the
         // acquire load observes its initialization. The caller guarantees that the allocation
         // remains valid for `'a`.
-        Some(unsafe { ErasedMemo::from_raw_parts(memo, type_.to_dyn_fn, type_.type_id) })
+        Some(unsafe {
+            ErasedMemo::from_raw_parts(
+                memo,
+                type_.to_dyn_fn,
+                #[cfg(debug_assertions)]
+                type_.type_id,
+            )
+        })
     }
 
     #[cfg(feature = "salsa_unstable")]
@@ -461,7 +473,11 @@ impl MemoTableWithTypesMut<'_> {
     /// Calls `f` on the memo at `memo_ingredient_index`.
     ///
     /// If the memo is not present, `f` is not called.
-    pub(crate) fn map_memo<M: Memo>(
+    ///
+    /// # Safety
+    ///
+    /// The memo type must match, meaning the `MemoIngredientIndex` must be correct.
+    pub(crate) unsafe fn map_memo<M: Memo>(
         self,
         memo_ingredient_index: MemoIngredientIndex,
         f: impl FnOnce(&mut M),
@@ -472,17 +488,14 @@ impl MemoTableWithTypesMut<'_> {
             return;
         };
 
-        // SAFETY: Any indices that are in-bounds for the `MemoTable` are also in-bounds for its
-        // corresponding `MemoTableTypes`, by construction.
-        let type_ = unsafe {
-            self.types
-                .types
-                .get_unchecked(memo_ingredient_index.as_usize())
-        };
+        #[cfg(debug_assertions)]
+        {
+            let type_ = &self.types.types[memo_ingredient_index.as_usize()];
 
-        // Verify that the we are casting to the correct type.
-        if type_.type_id != TypeId::of::<M>() {
-            type_assert_failed(memo_ingredient_index);
+            // Verify that the we are casting to the correct type.
+            if type_.type_id != TypeId::of::<M>() {
+                type_assert_failed(memo_ingredient_index);
+            }
         }
 
         let Some(memo) = NonNull::new(*atomic_memo.get_mut()) else {
@@ -533,6 +546,7 @@ impl MemoTableWithTypesMut<'_> {
 }
 
 /// This function is explicitly outlined to avoid debug machinery in the hot-path.
+#[cfg(debug_assertions)]
 #[cold]
 #[inline(never)]
 fn type_assert_failed(memo_ingredient_index: MemoIngredientIndex) -> ! {

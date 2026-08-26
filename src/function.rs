@@ -924,11 +924,14 @@ mod persistence {
                 // SAFETY: We provide the current revision.
                 let memo_table = unsafe { zalsa.table().dyn_memos(id, zalsa.current_revision()) };
 
-                memo_table.insert(
-                    memo_ingredient_index,
-                    // FIXME: Use `Box::into_non_null` once stable.
-                    NonNull::from(Box::leak(Box::new(memo))),
-                );
+                // SAFETY: The memo_ingredient_index is ours.
+                unsafe {
+                    memo_table.insert(
+                        memo_ingredient_index,
+                        // FIXME: Use `Box::into_non_null` once stable.
+                        NonNull::from(Box::leak(Box::new(memo))),
+                    );
+                }
             }
 
             Ok(())

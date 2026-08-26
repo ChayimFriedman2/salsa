@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use std::any::TypeId;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -24,9 +25,14 @@ impl<C: Configuration> IngredientImpl<C> {
         memo: NonNull<Memo<C>>,
         memo_ingredient_index: MemoIngredientIndex,
     ) -> Option<NonNull<Memo<C>>> {
-        zalsa
-            .memo_table_for::<C::SalsaStruct<'_>>(id)
-            .insert(memo_ingredient_index, memo)
+        // SAFETY: We pass the correct `IngredientIndex`, and the user cannot mess with them.
+        // To create a chain of safety proofs we would need to mark this unsafe as well, but this essentially
+        // requires marking all Salsa code unsafe so I gave up.
+        unsafe {
+            zalsa
+                .memo_table_for::<C::SalsaStruct<'_>>(id)
+                .insert(memo_ingredient_index, memo)
+        }
     }
 
     /// Loads the current memo for `key_index`. This does not hold any sort of
@@ -38,9 +44,12 @@ impl<C: Configuration> IngredientImpl<C> {
         id: Id,
         memo_ingredient_index: MemoIngredientIndex,
     ) -> Option<&'db Memo<C>> {
-        let memo = zalsa
-            .memo_table_for::<C::SalsaStruct<'_>>(id)
-            .get(memo_ingredient_index)?;
+        // SAFETY: We pass the correct `IngredientIndex`, and the user cannot mess with them.
+        let memo = unsafe {
+            zalsa
+                .memo_table_for::<C::SalsaStruct<'_>>(id)
+                .get(memo_ingredient_index)?
+        };
         // SAFETY: The memo table owns this allocation for at least `'db`.
         Some(unsafe { memo.as_ref() })
     }
@@ -75,7 +84,8 @@ impl<C: Configuration> IngredientImpl<C> {
             }
         };
 
-        table.map_memo(memo_ingredient_index, map)
+        // SAFETY: We pass the correct `IngredientIndex`, and the user cannot mess with them.
+        unsafe { table.map_memo(memo_ingredient_index, map) }
     }
 }
 
@@ -114,6 +124,7 @@ pub(crate) struct ErasedMemo<'db> {
     to_dyn_fn: ToDynMemo,
 
     /// The concrete memo type, used to assert that downcasts match the registered memo type.
+    #[cfg(debug_assertions)]
     type_id: TypeId,
 
     /// Binds shared access to the allocation lifetime.
@@ -133,12 +144,13 @@ impl<'memo> ErasedMemo<'memo> {
     pub(crate) unsafe fn from_raw_parts(
         data: NonNull<DummyMemo>,
         to_dyn_fn: ToDynMemo,
-        type_id: TypeId,
+        #[cfg(debug_assertions)] _type_id: TypeId,
     ) -> Self {
         Self {
             data,
             to_dyn_fn,
-            type_id,
+            #[cfg(debug_assertions)]
+            type_id: _type_id,
             _lifetime: PhantomData,
         }
     }
@@ -165,15 +177,20 @@ impl<'memo> ErasedMemo<'memo> {
     ///
     /// Panics if the memo was created for a different configuration, matching
     /// [`MemoTableWithTypes::get`](crate::table::memo::MemoTableWithTypes::get).
+    ///
+    /// # Safety
+    ///
+    /// The memo type must match, meaning the `MemoIngredientIndex` must be correct.
     #[inline]
-    pub(super) fn downcast<C: Configuration>(self) -> &'memo Memo<C> {
+    pub(super) unsafe fn downcast<C: Configuration>(self) -> &'memo Memo<C> {
+        #[cfg(debug_assertions)]
         assert_eq!(
             self.type_id,
             TypeId::of::<Memo<C>>(),
             "ErasedMemo downcast with the wrong configuration",
         );
 
-        // SAFETY: The type check proves that `data` points to `Memo<C>`; the handle guarantees
+        // SAFETY: Our precondition guarantees that `data` points to `Memo<C>`; the handle guarantees
         // that the allocation is valid for shared access for `'memo`.
         unsafe { self.data.cast::<Memo<C>>().as_ref() }
     }
@@ -614,8 +631,12 @@ mod _memory_usage {
         [(); std::mem::size_of::<[usize; 4]>()];
     const _: [(); std::mem::size_of::<super::Memo<DummyConfiguration>>()] =
         [(); std::mem::size_of::<[usize; 5]>()];
+    #[cfg(debug_assertions)]
     const _: [(); std::mem::size_of::<super::ErasedMemo<'static>>()] =
         [(); std::mem::size_of::<[usize; 4]>()];
+    #[cfg(not(debug_assertions))]
+    const _: [(); std::mem::size_of::<super::ErasedMemo<'static>>()] =
+        [(); std::mem::size_of::<[usize; 2]>()];
 
     struct DummyStruct;
 
