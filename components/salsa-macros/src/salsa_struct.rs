@@ -421,6 +421,10 @@ where
         self.args.no_lifetime.is_none()
     }
 
+    pub fn fields_iter(&self) -> impl Iterator<Item = (usize, &SalsaField<'s>)> {
+        self.fields.iter().enumerate()
+    }
+
     pub fn tracked_fields_iter(&self) -> impl Iterator<Item = (usize, &SalsaField<'s>)> {
         self.fields
             .iter()

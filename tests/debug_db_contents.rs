@@ -38,8 +38,8 @@ fn execute() {
     assert_eq!(interned.len(), 2);
     assert_eq!(interned[0].as_struct(), interned1);
     assert_eq!(interned[1].as_struct(), interned2);
-    assert_eq!(interned[0].value().fields().0, "Salsa");
-    assert_eq!(interned[1].value().fields().0, "Salsa2");
+    assert_eq!(interned[0].value().fields().0.0, "Salsa");
+    assert_eq!(interned[1].value().fields().0.0, "Salsa2");
 
     // test input structs
     let input1 = InputStruct::new(&db, 22);

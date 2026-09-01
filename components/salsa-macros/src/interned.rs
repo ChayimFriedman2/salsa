@@ -1,4 +1,4 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 
 use crate::hygiene::Hygiene;
 use crate::options::{AllowedOptions, AllowedPersistOptions, Options};
@@ -165,6 +165,11 @@ impl Macro {
             })
             .collect();
 
+        let hash_eq_field_indices = salsa_struct
+            .fields_iter()
+            .filter(|(_, field)| !field.has_no_eq_attr)
+            .map(|(index, _)| Literal::usize_unsuffixed(index));
+
         Ok(crate::debug::dump_tokens(
             struct_ident,
             quote! {
@@ -185,6 +190,7 @@ impl Macro {
                     field_getters: [#(#field_vis #field_getter_ids),*],
                     field_tys: [#(#field_tys),*],
                     field_indices: [#(#field_indices),*],
+                    hash_eq_field_indices: [#(#hash_eq_field_indices),*],
                     field_indexed_tys: [#(#field_indexed_tys),*],
                     field_attrs: [#([#(#field_unused_attrs),*]),*],
                     num_fields: #num_fields,

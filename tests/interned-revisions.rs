@@ -41,18 +41,18 @@ impl std::hash::Hash for PanickingLookup {
 }
 
 impl Lookup<BadHash> for PanickingLookup {
-    fn into_owned(self) -> BadHash {
+    fn into_owned(self, _id: salsa::Id) -> BadHash {
         assert_ne!(self.0, 2, "lookup panic");
         BadHash(self.0)
     }
 }
 
-impl HashEqLike<PanickingLookup> for BadHash {
+impl HashEqLike<BadHash> for PanickingLookup {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_i16(0);
     }
 
-    fn eq(&self, data: &PanickingLookup) -> bool {
+    fn eq(&self, data: &BadHash) -> bool {
         self.0 == data.0
     }
 }

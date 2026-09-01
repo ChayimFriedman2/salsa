@@ -408,6 +408,8 @@ pub mod plumbing {
     }
 
     pub mod interned {
+        pub use std::marker::PhantomData;
+
         pub use crate::interned::{Configuration, IngredientImpl, JarImpl, Value};
     }
 

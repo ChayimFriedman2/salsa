@@ -80,8 +80,8 @@ pub unsafe trait Configuration: Sized + 'static {
         D: plumbing::serde::Deserializer<'de>;
 }
 
-pub trait InternedData: Sized + Eq + Hash + Clone + Sync + Send {}
-impl<T: Eq + Hash + Clone + Sync + Send> InternedData for T {}
+pub trait InternedData: Sized + Eq + Hash + Sync + Send {}
+impl<T: Eq + Hash + Sync + Send> InternedData for T {}
 
 pub struct JarImpl<C: Configuration> {
     phantom: PhantomData<C>,
@@ -415,8 +415,7 @@ where
         assemble: impl FnOnce(Id, Key) -> C::Fields<'db>,
     ) -> C::Struct<'db>
     where
-        Key: Hash,
-        C::Fields<'db>: HashEqLike<Key>,
+        Key: HashEqLike<C::Fields<'db>>,
     {
         FromId::from_id(self.intern_id(zalsa, zalsa_local, key, assemble))
     }
@@ -439,12 +438,11 @@ where
         assemble: impl FnOnce(Id, Key) -> C::Fields<'db>,
     ) -> crate::Id
     where
-        Key: Hash,
         // We'd want the following predicate, but this currently implies `'static` due to a rustc
         // bug
         // for<'db> C::Data<'db>: HashEqLike<Key>,
         // so instead we go with this and transmute the lifetime in the `eq` closure
-        C::Fields<'db>: HashEqLike<Key>,
+        Key: HashEqLike<C::Fields<'db>>,
     {
         // Record the current revision as active.
         let current_revision = zalsa.current_revision();
@@ -453,7 +451,7 @@ where
         }
 
         // Hash the value before acquiring the lock.
-        let hash = self.hasher.hash_one(&key);
+        let hash = hash_one(&self.hasher, &key);
 
         let shard_index = self.shard(hash);
         // SAFETY: `shard_index` is guaranteed to be in-bounds for `self.shards`.
@@ -669,8 +667,7 @@ where
         hash: u64,
     ) -> crate::Id
     where
-        Key: Hash,
-        C::Fields<'db>: HashEqLike<Key>,
+        Key: HashEqLike<C::Fields<'db>>,
     {
         let current_revision = zalsa.current_revision();
 
@@ -952,12 +949,12 @@ where
     // The lock must be held for the shard containing the value.
     unsafe fn value_eq<'db, Key>(value: &'db Value<C>, key: &Key) -> bool
     where
-        C::Fields<'db>: HashEqLike<Key>,
+        Key: HashEqLike<C::Fields<'db>>,
     {
         // SAFETY: We hold the lock for the shard containing the value.
         let fields = unsafe { &*value.fields.get() };
 
-        HashEqLike::eq(Self::from_internal_data(fields), key)
+        HashEqLike::eq(key, Self::from_internal_data(fields))
     }
 
     /// Returns the database key index for an interned value with the given id.
@@ -1050,6 +1047,20 @@ where
             }
         })
     }
+}
+
+#[inline]
+fn hash_one<O>(hasher: &impl BuildHasher, value: &impl HashEqLike<O>) -> u64 {
+    struct Hashable<'a, T, O>(&'a T, PhantomData<O>);
+
+    impl<O, T: HashEqLike<O>> Hash for Hashable<'_, T, O> {
+        #[inline]
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.hash(state);
+        }
+    }
+
+    hasher.hash_one(Hashable(value, PhantomData))
 }
 
 /// Creates the sharded storage outside of the generic [`IngredientImpl::new`] context.
@@ -1431,12 +1442,15 @@ pub trait HashEqLike<O> {
 /// where `struct ViewStruct<L1: Lookup<K1>...>(K1...)`. The `Borrow` trait
 /// requires that `&(K1...)` be convertible to `&ViewStruct` which just isn't
 /// possible. `Lookup` instead offers direct `hash` and `eq` methods.
-pub trait Lookup<O> {
-    fn into_owned(self) -> O;
+pub trait Lookup<O>: Sized {
+    /// `id` is the [`Id`] of the to-be-created struct.
+    ///
+    /// **Warning:** Trying to lookup the ID before returning can result in a deadlock.
+    fn into_owned(self, id: Id) -> O;
 }
 
 impl<T> Lookup<T> for T {
-    fn into_owned(self) -> T {
+    fn into_owned(self, _id: Id) -> T {
         self
     }
 }
@@ -1484,20 +1498,19 @@ impl<T> Lookup<T> for &T
 where
     T: Clone,
 {
-    fn into_owned(self) -> T {
+    fn into_owned(self, _id: Id) -> T {
         Clone::clone(self)
     }
 }
 
-impl<'a, T> HashEqLike<&'a T> for Box<T>
+impl<T> HashEqLike<Box<T>> for &T
 where
     T: ?Sized + Hash + Eq,
-    Box<T>: From<&'a T>,
 {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, &mut *h)
     }
-    fn eq(&self, data: &&T) -> bool {
+    fn eq(&self, data: &Box<T>) -> bool {
         **self == **data
     }
 }
@@ -1507,20 +1520,19 @@ where
     T: ?Sized + Hash + Eq,
     Box<T>: From<&'a T>,
 {
-    fn into_owned(self) -> Box<T> {
+    fn into_owned(self, _id: Id) -> Box<T> {
         Box::from(self)
     }
 }
 
-impl<'a, T> HashEqLike<&'a T> for Arc<T>
+impl<T> HashEqLike<Arc<T>> for &T
 where
     T: ?Sized + Hash + Eq,
-    Arc<T>: From<&'a T>,
 {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(&**self, &mut *h)
     }
-    fn eq(&self, data: &&T) -> bool {
+    fn eq(&self, data: &Arc<T>) -> bool {
         **self == **data
     }
 }
@@ -1530,21 +1542,20 @@ where
     T: ?Sized + Hash + Eq,
     Arc<T>: From<&'a T>,
 {
-    fn into_owned(self) -> Arc<T> {
+    fn into_owned(self, _id: Id) -> Arc<T> {
         Arc::from(self)
     }
 }
 
 #[cfg(feature = "triomphe")]
-impl<'a, T> HashEqLike<&'a T> for triomphe::Arc<T>
+impl<'a, T> HashEqLike<triomphe::Arc<T>> for &'a T
 where
     T: ?Sized + Hash + Eq,
-    triomphe::Arc<T>: From<&'a T>,
 {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(&**self, &mut *h)
     }
-    fn eq(&self, data: &&T) -> bool {
+    fn eq(&self, data: &triomphe::Arc<T>) -> bool {
         **self == **data
     }
 }
@@ -1555,189 +1566,191 @@ where
     T: ?Sized + Hash + Eq,
     triomphe::Arc<T>: From<&'a T>,
 {
-    fn into_owned(self) -> triomphe::Arc<T> {
+    fn into_owned(self, _id: Id) -> triomphe::Arc<T> {
         triomphe::Arc::from(self)
     }
 }
 
 impl Lookup<String> for &str {
-    fn into_owned(self) -> String {
+    fn into_owned(self, _id: Id) -> String {
         self.to_owned()
     }
 }
 
 #[cfg(feature = "compact_str")]
 impl Lookup<compact_str::CompactString> for &str {
-    fn into_owned(self) -> compact_str::CompactString {
+    fn into_owned(self, _id: Id) -> compact_str::CompactString {
         compact_str::CompactString::new(self)
     }
 }
 
 #[cfg(feature = "compact_str")]
-impl HashEqLike<&str> for compact_str::CompactString {
+impl HashEqLike<compact_str::CompactString> for &str {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, &mut *h)
     }
 
-    fn eq(&self, data: &&str) -> bool {
-        self == *data
+    fn eq(&self, data: &compact_str::CompactString) -> bool {
+        *self == data
     }
 }
 
 #[cfg(feature = "compact_str")]
-impl HashEqLike<Cow<'_, str>> for compact_str::CompactString {
+impl HashEqLike<compact_str::CompactString> for Cow<'_, str> {
     fn hash<H: Hasher>(&self, h: &mut H) {
-        self.as_str().hash(h);
+        self.as_ref().hash(h);
     }
 
-    fn eq(&self, data: &Cow<'_, str>) -> bool {
-        self.as_str() == data.as_ref()
+    fn eq(&self, data: &compact_str::CompactString) -> bool {
+        self.as_ref() == data.as_str()
     }
 }
 
 #[cfg(feature = "compact_str")]
 impl Lookup<compact_str::CompactString> for Cow<'_, str> {
-    fn into_owned(self) -> compact_str::CompactString {
+    fn into_owned(self, _id: Id) -> compact_str::CompactString {
         compact_str::CompactString::new(Cow::into_owned(self))
     }
 }
 
-impl HashEqLike<&str> for String {
+impl HashEqLike<String> for &str {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, &mut *h)
     }
 
-    fn eq(&self, data: &&str) -> bool {
-        self == *data
+    fn eq(&self, data: &String) -> bool {
+        *self == data
     }
 }
 
-impl<A, T: Hash + Eq + PartialEq<A>> HashEqLike<&[A]> for Vec<T> {
+impl<A: Hash + Eq + PartialEq<T>, T> HashEqLike<Vec<T>> for &[A] {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, h);
     }
 
-    fn eq(&self, data: &&[A]) -> bool {
+    fn eq(&self, data: &Vec<T>) -> bool {
         self.len() == data.len() && data.iter().enumerate().all(|(i, a)| &self[i] == a)
     }
 }
 
 impl<A: Hash + Eq + PartialEq<T> + Clone + Lookup<T>, T> Lookup<Vec<T>> for &[A] {
-    fn into_owned(self) -> Vec<T> {
-        self.iter().map(|a| Lookup::into_owned(a.clone())).collect()
+    fn into_owned(self, id: Id) -> Vec<T> {
+        self.iter()
+            .map(|a| Lookup::into_owned(a.clone(), id))
+            .collect()
     }
 }
 
-impl<const N: usize, A, T: Hash + Eq + PartialEq<A>> HashEqLike<[A; N]> for Vec<T> {
+impl<const N: usize, A: Hash + Eq + PartialEq<T>, T> HashEqLike<Vec<T>> for [A; N] {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, h);
     }
 
-    fn eq(&self, data: &[A; N]) -> bool {
+    fn eq(&self, data: &Vec<T>) -> bool {
         self.len() == data.len() && data.iter().enumerate().all(|(i, a)| &self[i] == a)
     }
 }
 
 impl<const N: usize, A: Hash + Eq + PartialEq<T> + Clone + Lookup<T>, T> Lookup<Vec<T>> for [A; N] {
-    fn into_owned(self) -> Vec<T> {
+    fn into_owned(self, id: Id) -> Vec<T> {
         self.into_iter()
-            .map(|a| Lookup::into_owned(a.clone()))
+            .map(|a| Lookup::into_owned(a, id))
             .collect()
     }
 }
 
-impl HashEqLike<&Path> for PathBuf {
+impl HashEqLike<PathBuf> for &Path {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, h);
     }
 
-    fn eq(&self, data: &&Path) -> bool {
+    fn eq(&self, data: &PathBuf) -> bool {
         self == data
     }
 }
 
 impl Lookup<PathBuf> for &Path {
-    fn into_owned(self) -> PathBuf {
+    fn into_owned(self, _id: Id) -> PathBuf {
         self.to_owned()
     }
 }
 
-impl<T: Hash + Eq + Clone> HashEqLike<Cow<'_, T>> for T {
+impl<T: Hash + Eq + Clone> HashEqLike<T> for Cow<'_, T> {
     fn hash<H: Hasher>(&self, h: &mut H) {
         Hash::hash(self, h);
     }
 
-    fn eq(&self, data: &Cow<'_, T>) -> bool {
-        self == data.as_ref()
+    fn eq(&self, data: &T) -> bool {
+        self.as_ref() == data
     }
 }
 
 impl<T: Clone> Lookup<T> for Cow<'_, T> {
-    fn into_owned(self) -> T {
+    fn into_owned(self, _id: Id) -> T {
         Cow::into_owned(self)
     }
 }
 
-impl HashEqLike<Cow<'_, str>> for String {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        self.as_str().hash(h);
-    }
-
-    fn eq(&self, data: &Cow<'_, str>) -> bool {
-        self.as_str() == data.as_ref()
-    }
-}
-
-impl Lookup<String> for Cow<'_, str> {
-    fn into_owned(self) -> String {
-        Cow::into_owned(self)
-    }
-}
-
-impl HashEqLike<Cow<'_, Path>> for PathBuf {
-    fn hash<H: Hasher>(&self, h: &mut H) {
-        self.as_path().hash(h);
-    }
-
-    fn eq(&self, data: &Cow<'_, Path>) -> bool {
-        self.as_path() == data.as_ref()
-    }
-}
-
-impl Lookup<PathBuf> for Cow<'_, Path> {
-    fn into_owned(self) -> PathBuf {
-        Cow::into_owned(self)
-    }
-}
-
-impl<T: Hash + Eq + Clone> HashEqLike<Cow<'_, [T]>> for Box<[T]> {
+impl HashEqLike<String> for Cow<'_, str> {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.as_ref().hash(h);
     }
 
-    fn eq(&self, data: &Cow<'_, [T]>) -> bool {
+    fn eq(&self, data: &String) -> bool {
+        self.as_ref() == data.as_str()
+    }
+}
+
+impl Lookup<String> for Cow<'_, str> {
+    fn into_owned(self, _id: Id) -> String {
+        Cow::into_owned(self)
+    }
+}
+
+impl HashEqLike<PathBuf> for Cow<'_, Path> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.as_ref().hash(h);
+    }
+
+    fn eq(&self, data: &PathBuf) -> bool {
+        self.as_ref() == data.as_path()
+    }
+}
+
+impl Lookup<PathBuf> for Cow<'_, Path> {
+    fn into_owned(self, _id: Id) -> PathBuf {
+        Cow::into_owned(self)
+    }
+}
+
+impl<T: Hash + Eq + Clone> HashEqLike<Box<[T]>> for Cow<'_, [T]> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.as_ref().hash(h);
+    }
+
+    fn eq(&self, data: &Box<[T]>) -> bool {
         self.as_ref() == data.as_ref()
     }
 }
 
 impl<T: Clone> Lookup<Box<[T]>> for Cow<'_, [T]> {
-    fn into_owned(self) -> Box<[T]> {
+    fn into_owned(self, _id: Id) -> Box<[T]> {
         Cow::into_owned(self).into_boxed_slice()
     }
 }
 
-impl<T: Hash + Eq + Clone> HashEqLike<Cow<'_, [T]>> for Vec<T> {
+impl<T: Hash + Eq + Clone> HashEqLike<Vec<T>> for Cow<'_, [T]> {
     fn hash<H: Hasher>(&self, h: &mut H) {
-        self.as_slice().hash(h);
+        self.as_ref().hash(h);
     }
 
-    fn eq(&self, data: &Cow<'_, [T]>) -> bool {
-        self.as_slice() == data.as_ref()
+    fn eq(&self, data: &Vec<T>) -> bool {
+        self.as_ref() == data.as_slice()
     }
 }
 
 impl<T: Clone> Lookup<Vec<T>> for Cow<'_, [T]> {
-    fn into_owned(self) -> Vec<T> {
+    fn into_owned(self, _id: Id) -> Vec<T> {
         Cow::into_owned(self)
     }
 }
